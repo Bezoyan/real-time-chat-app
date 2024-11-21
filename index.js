@@ -1,70 +1,63 @@
-import { createServer } from 'http';
-import staticHandler from 'serve-handler';
-import { WebSocketServer } from 'ws';
-import yargs from 'yargs';
-import { hideBin } from 'yargs/helpers';
-import zmq from 'zeromq';
+import { createServer } from 'http'
+import staticHandler from 'serve-handler'
+import { WebSocketServer, WebSocket } from 'ws'
+import amqp from 'amqplib'
+import JSONStream from 'JSONStream'
+import superagent from 'superagent'
 
-const argv = yargs(hideBin(process.argv))
-  .option('http', {
-    alias: 'h',
-    description: 'HTTP server port',
-    type: 'number',
-    default: 8080,
-  })
-  .option('pub', {
-    description: 'Publisher socket port',
-    type: 'number',
-    demandOption: true,
-  })
-  .option('sub', {
-    description: 'Subscriber socket ports',
-    type: 'array',
-    demandOption: true,
-  })
-  .help()
-  .alias('help', 'h')
-  .argv;
+const httpPort = process.argv[2] || 8080
 
-const server = createServer((req, res) => {
-  return staticHandler(req, res, { public: 'www' });
-});
+async function main () {
+    const connection = await amqp.connect('amqp://localhost')
+    const channel = await connection.createChannel()
+    await channel.assertExchange('chat', 'fanout')
 
-let pubSocket;
-async function initializeSockets() {
-  pubSocket = new zmq.Publisher();
-  await pubSocket.bind(`tcp://127.0.0.1:${argv.pub}`);
-  const subSocket = new zmq.Subscriber();
-  const subPorts = [].concat(argv.sub);
-  for (const port of subPorts) {
-    console.log(`Subscribing to ${port}`);
-    subSocket.connect(`tcp://127.0.0.1:${port}`);
-  }
-  subSocket.subscribe('chat');
-  for await (const [msg] of subSocket) {
-    console.log(`Message from another server: ${msg}`);
-    broadcast(msg.toString().split(' ')[1]);
-  }
-}
+    const { queue } = await channel.assertQueue(
+      `chat_srv_${httpPort}`,
+      { exclusive: true }
+    )
+    await channel.bindQueue(queue, 'chat')
+    channel.consume(queue, msg => {
+        msg = msg.content.toString()
+        console.log(`From queue: ${msg}`)
+        broadcast(msg)
+    }, { noAck: true })
 
-initializeSockets();
+    // Serve static files
+    const server = createServer((req, res) => {
+        return staticHandler(req, res, { public: 'www' })
+    })
 
-const wss = new WebSocketServer({ server });
-wss.on('connection', client => {
-  console.log('Client connected');
-  client.on('message', msg => {
-    console.log(`Message: ${msg}`);
-    broadcast(msg);
-    pubSocket.send(`chat ${msg}`);
-  });
-});
+    const wss = new WebSocketServer({ server })
+    wss.on('connection', client => {
+        console.log('Client connected')
+        client.on('message', msg => {
+            console.log(`Message: ${msg}`)
+            channel.publish('chat', '', Buffer.from(msg))
+        })
 
-function broadcast(msg) {
-  for (const client of wss.clients) {
-    if (client.readyState === client.OPEN) {
-      client.send(msg);
+        // Query the history service
+        superagent
+          .get('http://localhost:8090')
+          .on('error', err => console.error(err))
+          .pipe(JSONStream.parse('*'))
+          .on('data', msg => {
+              // Serialize the message before sending
+              client.send(JSON.stringify(msg))
+          })
+    })
+
+    function broadcast (msg) {
+        for (const client of wss.clients) {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(msg)
+            }
+        }
     }
-  }
+
+    server.listen(httpPort, () => {
+        console.log(`Server listening on port ${httpPort}`)
+    })
 }
 
-server.listen(argv.http);
+main().catch(err => console.error(err))
