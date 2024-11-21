@@ -1,33 +1,60 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebSocket Chat</title>
+  </head>
   <body>
-    Messages:
+    <h2>Messages:</h2>
     <div id="messages"></div>
-    <form id="msgForm">
-      <input type="text" placeholder="Send a message" id="msgBox"/>
-      <input type="submit" value="Send"/>
-      </form>
-    <script>
-      const ws = new WebSocket(
-        `ws://${window.document.location.host}`
-      )
-      ws.onmessage = function (message) {
-        const msgDiv = document.createElement('div')
-        msgDiv.innerHTML = message.data
-        document.getElementById('messages').appendChild(msgDiv)
-      }
-      const form = document.getElementById('msgForm')
-      form.addEventListener('submit', (event) => {
-  event.preventDefault();
-  const message = document.getElementById('msgBox').value;
 
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(message);
-    document.getElementById('msgBox').value = '';
-  } else {
-    console.error('WebSocket connection is not open.');
-  }
-});
- </script>
+    <form id="msgForm">
+      <input type="text" placeholder="Send a message" id="msgBox" />
+      <input type="submit" value="Send" />
+    </form>
+
+    <script>
+      // Establish WebSocket connection to the server
+      const ws = new WebSocket(`ws://${window.location.host}`);
+
+      // Event handler for incoming WebSocket messages
+      ws.onmessage = function (message) {
+        const msgDiv = document.createElement('div');
+        msgDiv.textContent = message.data;
+        document.getElementById('messages').appendChild(msgDiv);
+      };
+
+      // Check if WebSocket connection opens successfully
+      ws.onopen = function () {
+        console.log('Connected to WebSocket server');
+      };
+
+      // Error handler for WebSocket connection issues
+      ws.onerror = function (error) {
+        console.error('WebSocket error:', error);
+      };
+
+      // WebSocket close event handler
+      ws.onclose = function () {
+        console.warn('WebSocket connection closed');
+      };
+
+      // Form submission handler for sending messages
+      const form = document.getElementById('msgForm');
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+
+        const message = document.getElementById('msgBox').value;
+
+        // Send message if WebSocket is open
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(message);
+          document.getElementById('msgBox').value = '';
+        } else {
+          console.error('WebSocket connection is not open.');
+        }
+      });
+    </script>
   </body>
 </html>
